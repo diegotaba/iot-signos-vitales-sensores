@@ -1,0 +1,80 @@
+// Esta es la librería para utilizar las funciones de red del ESP8266
+#include <ESP8266WiFi.h> 
+#include <ArduinoJson.h>  
+#include <ESP8266HTTPClient.h>
+
+const char* ssid = "iPhone de John Fredy"; // Rellena con el nombre de tu red WiFi
+const char* password = "integrakar"; // Rellena con la contraseña de tu red WiFi
+const char* host = "172.20.10.2";
+
+#define LED_BUILTIN 2
+#define BUTTON_BUILTIN D2
+
+void sendRequest(String room_event_type, int room_id){
+
+  StaticJsonBuffer<200> JSONbuffer;
+  JsonObject& root = JSONbuffer.createObject(); 
+  root["room_id"] = room_id;
+  root["room_event_type"] = room_event_type;
+
+  char JSONmessageBuffer[1000];
+  root.printTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
+  Serial.println(JSONmessageBuffer);
+
+  HTTPClient http;
+  http.begin("http://172.20.10.2:9090/v1.0/rooms");
+  http.addHeader("Content-Type", "application/json");
+  int httpCode = http.POST(JSONmessageBuffer);
+  Serial.println(httpCode);
+  http.end();
+  
+  }
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(BUTTON_BUILTIN, INPUT);
+  Serial.begin(115200);
+  delay(100);
+
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+ while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP()); 
+}
+
+void loop() {
+
+  WiFiClient client;
+  const int httpPort = 9090;
+  if (!client.connect(host, httpPort)) {
+    Serial.println("connection failed");
+     delay(1000);
+    return;
+  }
+
+  if (digitalRead(BUTTON_BUILTIN) == LOW){
+      sendRequest("PE",15);
+      Serial.println("Buton presionado");
+    };
+   delay(500); // Can be changed
+   
+  if (client.connected()) { 
+    client.stop();  // DISCONNECT FROM THE SERVER
+  }
+  Serial.println();
+  Serial.println("closing connection");
+//  delay(5000);
+}
