@@ -1,80 +1,147 @@
-// Esta es la librería para utilizar las funciones de red del ESP8266
-#include <ESP8266WiFi.h> 
-#include <ArduinoJson.h>  
-#include <ESP8266HTTPClient.h>
+#include "MAX30100_PulseOximeter.h"
+#include <ESP8266WiFi.h>
+#include <Adafruit_MLX90614.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
 
-const char* ssid = "iPhone de John Fredy"; // Rellena con el nombre de tu red WiFi
-const char* password = "integrakar"; // Rellena con la contraseña de tu red WiFi
-const char* host = "172.20.10.2";
+// Wifi settings
+const char* ssid = "Familia Romero";
+const char* password = "A3102214362";
 
-#define LED_BUILTIN 2
-#define BUTTON_BUILTIN D2
+//Sensors libs instance
+PulseOximeter pox;
+Adafruit_MLX90614 mlx = Adafruit_MLX90614();
 
-void sendRequest(String room_event_type, int room_id){
+// Const to start in proggram
+float BPM, SpO2, ObjectTempC, AmbientTempC;
+const int ID_DEVICE = 1;
+uint32_t tLastReport = 0;
+uint32_t oLastReport = 0;
+uint32_t hrLastReport = 0;
+int REPORTING_TEMPERATURE_PERIOD_MS = 1000;
+int REPORTING_HEART_RATE_PERIOD_MS = 1000;
+int REPORTING_OXIGENATION_PERIOD_MS = 1000;
 
-  StaticJsonBuffer<200> JSONbuffer;
-  JsonObject& root = JSONbuffer.createObject(); 
-  root["room_id"] = room_id;
-  root["room_event_type"] = room_event_type;
 
-  char JSONmessageBuffer[1000];
-  root.printTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
-  Serial.println(JSONmessageBuffer);
+// Mqtt config 
+const char* mqttServer = "192.168.1.4";  
+const int mqttPort = 1883;
+WiFiClient espClient;
+PubSubClient client(espClient);
 
-  HTTPClient http;
-  http.begin("http://172.20.10.2:9090/v1.0/rooms");
-  http.addHeader("Content-Type", "application/json");
-  int httpCode = http.POST(JSONmessageBuffer);
-  Serial.println(httpCode);
-  http.end();
+
+void callback(char* topic, byte* payload, unsigned int length) {
+
+  String incomingMessage = "";
+ 
+  Serial.print("Message arrived in topic: ");
+  Serial.println(topic);
+ 
+  Serial.print("Message:");
+  for (int i = 0; i < length; i++) { 
+    incomingMessage = incomingMessage + (char)payload[i];
+  }
+  
+  setMeasuresTimes(incomingMessage);
+}
+
+void setMeasuresTimes(String messsage) {
+  DynamicJsonDocument doc(1024);
+  deserializeJson(doc, messsage);
+  JsonObject obj = doc.as<JsonObject>();
+  int tempTime = obj[String("time")];
+  int device = obj[String("id_device")];
+  String sensor = obj[String("sensor")];
+
+  if (device == ID_DEVICE){
+    if(sensor ==  String("TEMPERATURE")){
+       REPORTING_TEMPERATURE_PERIOD_MS = tempTime;    
+      }
+     if(sensor ==  String("OXIGENATION")){
+       REPORTING_OXIGENATION_PERIOD_MS = tempTime;    
+      }
+     if(sensor ==  String("HEART_RATE")){
+       REPORTING_HEART_RATE_PERIOD_MS = tempTime;    
+      }
+   
+    } 
+
+  Serial.print("received temperature after serializate ");
+  Serial.print(tempTime);
   
   }
 
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(BUTTON_BUILTIN, INPUT);
-  Serial.begin(115200);
-  delay(100);
+   Serial.begin(115200);
+   Serial.print("Connecting to ");
+   Serial.println(ssid);
 
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
- while (WiFi.status() != WL_CONNECTED) {
+   WiFi.begin(ssid, password);   
+    while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    Serial.print("Unable to connect Wifi \n");
   }
-
-  Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP()); 
+  client.setServer(mqttServer, mqttPort);
+  client.setCallback(callback);
+
+      if (client.connect("ESP8266Client")) {
+ 
+      Serial.println("mqtt client connected");  
+ 
+    } else {
+ 
+      Serial.print("failed mqtt client with state ");
+      Serial.print(client.state());
+      delay(2000);
+    }
+    client.subscribe("esp/test");
+
+    mlx.begin();  
+    if (!pox.begin()) {
+      Serial.println("FAILED");
+       for(;;);
+    }
+    else
+    {
+    Serial.println("SUCCESS");
+    }
+  
 }
 
 void loop() {
 
-  WiFiClient client;
-  const int httpPort = 9090;
-  if (!client.connect(host, httpPort)) {
-    Serial.println("connection failed");
-     delay(1000);
-    return;
-  }
+  pox.update();
+  BPM = pox.getHeartRate();
+  SpO2 = pox.getSpO2();
+  AmbientTempC = mlx.readAmbientTempC();
+  ObjectTempC = mlx.readObjectTempC();
 
-  if (digitalRead(BUTTON_BUILTIN) == LOW){
-      sendRequest("PE",15);
-      Serial.println("Buton presionado");
-    };
-   delay(500); // Can be changed
-   
-  if (client.connected()) { 
-    client.stop();  // DISCONNECT FROM THE SERVER
-  }
-  Serial.println();
-  Serial.println("closing connection");
-//  delay(5000);
+   if (millis() - tLastReport > REPORTING_TEMPERATURE_PERIOD_MS)
+    {
+         Serial.print(ObjectTempC); 
+         Serial.print("  Object Temperature = "); 
+         Serial.print(ObjectTempC);        
+        tLastReport = millis();      
+      }
+
+    if (millis() - oLastReport > REPORTING_OXIGENATION_PERIOD_MS)
+    {
+         Serial.print(" SpO2: ");
+         Serial.print(SpO2);
+         Serial.println(" %");        
+         oLastReport = millis();   
+      }
+    if (millis() - hrLastReport > REPORTING_HEART_RATE_PERIOD_MS)
+    {
+        Serial.print("Heart rate:  ");
+        Serial.print(BPM);       
+        hrLastReport = millis();
+      
+      }
+
+  client.loop();
+
 }
